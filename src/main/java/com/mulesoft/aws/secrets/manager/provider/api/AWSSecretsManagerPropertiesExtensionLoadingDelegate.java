@@ -13,12 +13,23 @@ import org.mule.runtime.api.meta.model.declaration.fluent.ConfigurationDeclarer;
 import org.mule.runtime.api.meta.model.declaration.fluent.ExtensionDeclarer;
 import org.mule.runtime.api.meta.model.declaration.fluent.ParameterGroupDeclarer;
 import org.mule.runtime.api.meta.model.display.DisplayModel;
+import org.mule.runtime.extension.api.exception.IllegalModelDefinitionException;
 import org.mule.runtime.extension.api.loader.ExtensionLoadingContext;
 import org.mule.runtime.extension.api.loader.ExtensionLoadingDelegate;
 
 import static com.mulesoft.aws.secrets.manager.provider.api.AWSSecretsManagerConfigurationPropertiesConstants.*;
 import static org.mule.metadata.api.model.MetadataFormat.JAVA;
 import static org.mule.runtime.api.meta.Category.SELECT;
+import static org.mule.sdk.api.meta.JavaVersion.JAVA_11;
+import static org.mule.sdk.api.meta.JavaVersion.JAVA_17;
+import static org.mule.sdk.api.meta.JavaVersion.JAVA_8;
+
+import static java.util.Arrays.asList;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Declares extension for Secure Properties Configuration module
@@ -27,8 +38,24 @@ import static org.mule.runtime.api.meta.Category.SELECT;
  */
 public class AWSSecretsManagerPropertiesExtensionLoadingDelegate implements ExtensionLoadingDelegate {
 
+  // We need to use reflection to avoid having to bump the minMuleVersion of this extension
+  // If that is not an issue then this code can be simplified a lot by upgrading the modules-parent to at least 1.5.0
+  private static final Method SUPPORTING_JAVA_VERSIONS_METHOD = getSupportingJavaVersionsMethod();
+
+  private static Method getSupportingJavaVersionsMethod() {
+    try {
+      return ExtensionDeclarer.class.getMethod("supportingJavaVersions", Set.class);
+    } catch (NoSuchMethodException e) {
+      // The method doesn't exist in this version: the Runtime we are running with doesn't care about supported Java versions
+      // declaration
+      return null;
+    }
+  }
+
   @Override
   public void accept(ExtensionDeclarer extensionDeclarer, ExtensionLoadingContext context) {
+    declareJavaVersionSupport(extensionDeclarer, new HashSet<>(asList(JAVA_8.version(), JAVA_11.version(), JAVA_17.version())));
+
     ConfigurationDeclarer configurationDeclarer = extensionDeclarer.named(EXTENSION_NAME)
             .describedAs(String.format("Crafted %s Extension", EXTENSION_NAME))
             .withCategory(SELECT)
@@ -37,6 +64,21 @@ public class AWSSecretsManagerPropertiesExtensionLoadingDelegate implements Exte
             .withConfig(CONFIG_ELEMENT);
 
     addSecretsManagerParameters(configurationDeclarer);
+  }
+
+  private void declareJavaVersionSupport(ExtensionDeclarer extensionDeclarer, Set<String> javaVersions) {
+    if (SUPPORTING_JAVA_VERSIONS_METHOD == null) {
+      // Nothing to do, the Runtime we are running with doesn't care about supported Java versions declaration
+      return;
+    }
+
+    try {
+      SUPPORTING_JAVA_VERSIONS_METHOD.invoke(extensionDeclarer, javaVersions);
+    } catch (IllegalAccessException e) {
+      throw new IllegalModelDefinitionException(e);
+    } catch (InvocationTargetException e) {
+      throw new IllegalModelDefinitionException(e.getTargetException());
+    }
   }
 
 
